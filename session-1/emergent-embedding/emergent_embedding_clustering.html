@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Emergent Clustering in Next-Token Embeddings</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212b; --border:#2a2f3a;
+    --text:#e6e8ee; --muted:#9aa2b1; --accent:#3a86ff;
+    --animal:#e0574f; --fruit:#2aa198; --verb:#4c8dff; --boundary:#9a9a9a;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; padding:24px; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.5;
+  }
+  h1{font-size:20px; margin:0 0 4px;}
+  h2{font-size:15px; margin:0 0 10px; color:var(--text); font-weight:600;}
+  .sub{color:var(--muted); font-size:13px; margin:0 0 20px; max-width:820px;}
+  .grid{display:grid; grid-template-columns:1.1fr 1fr; gap:16px; align-items:start;}
+  @media (max-width:900px){ .grid{grid-template-columns:1fr;} }
+  .card{
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:16px; margin-bottom:16px;
+  }
+  .controls{display:flex; flex-wrap:wrap; gap:14px; align-items:end;}
+  .field{display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--muted);}
+  .field input{
+    width:90px; background:var(--panel2); border:1px solid var(--border); color:var(--text);
+    padding:6px 8px; border-radius:6px; font-size:13px;
+  }
+  button{
+    background:var(--accent); color:#fff; border:none; border-radius:7px;
+    padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer;
+  }
+  button.secondary{background:var(--panel2); border:1px solid var(--border); color:var(--text);}
+  button:hover{filter:brightness(1.1);}
+  canvas{display:block; width:100%; height:auto; background:#12141a; border-radius:8px; border:1px solid var(--border);}
+  table{width:100%; border-collapse:collapse; font-size:13px;}
+  th,td{padding:6px 8px; text-align:left; border-bottom:1px solid var(--border);}
+  th{color:var(--muted); font-weight:600; font-size:12px;}
+  .tag{
+    display:inline-block; padding:2px 8px; border-radius:20px; color:#fff; font-size:11px;
+    font-weight:600;
+  }
+  .legend{display:flex; gap:16px; font-size:12px; color:var(--muted); margin-top:8px; flex-wrap:wrap;}
+  .dot{display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:middle;}
+  .dist-row{display:flex; align-items:center; gap:10px; margin-bottom:6px;}
+  .dist-label{width:60px; font-size:12px; color:var(--muted); flex-shrink:0; font-family:ui-monospace,monospace;}
+  .dist-bar{flex:1; display:flex; height:18px; border-radius:4px; overflow:hidden; border:1px solid var(--border);}
+  .dist-seg{height:100%;}
+  .verdict{
+    font-size:14px; padding:12px 14px; border-radius:8px; margin-top:10px;
+    background:#132b1f; border:1px solid #1f5c3f; color:#8fe3b6;
+  }
+  .verdict.bad{background:#2b1717; border-color:#5c1f1f; color:#e38f8f;}
+  .stat-row{display:flex; gap:24px; font-size:13px; margin-top:6px;}
+  .stat{color:var(--muted);}
+  .stat b{color:var(--text); font-size:16px; display:block;}
+  details summary{cursor:pointer; color:var(--muted); font-size:13px; margin-bottom:8px;}
+  code{background:var(--panel2); padding:1px 5px; border-radius:4px; font-size:12px;}
+  .sentences{font-family:ui-monospace,monospace; font-size:12.5px; color:var(--muted); line-height:1.9; word-spacing:2px;}
+  .loading{color:var(--muted); font-size:13px;}
+</style>
+</head>
+<body>
+
+<h1>Emergent Clustering in Next-Token Embeddings</h1>
+<p class="sub">
+Claim: a model trained only to predict the next token in a tiny synthetic grammar will organize its
+embedding table by semantic category — even though category labels and similarity were never part of
+the training signal. The mechanism: same-category tokens are grammatically interchangeable, so they end
+up with near-identical next-token distributions, and gradient descent is forced to give them near-identical
+embeddings to produce that. Everything below runs live in this page — no server, no pretrained anything.
+</p>
+
+<details class="card" open>
+  <summary><strong>How the toy grammar works</strong></summary>
+  <p style="color:var(--muted); font-size:13px;">
+  Vocabulary (9 tokens), grouped into categories the model is never told about:
+  </p>
+  <div class="legend">
+    <span><span class="dot" style="background:var(--animal)"></span><b>animals:</b> cat, dog, cow</span>
+    <span><span class="dot" style="background:var(--fruit)"></span><b>fruits:</b> apple, mango</span>
+    <span><span class="dot" style="background:var(--verb)"></span><b>verbs:</b> eat, chase, see</span>
+    <span><span class="dot" style="background:var(--boundary)"></span><b>boundary:</b> &lt;EOS&gt;</span>
+  </div>
+  <p style="color:var(--muted); font-size:13px; margin-top:10px;">
+  Every sentence is generated as <code>SUBJECT VERB OBJECT &lt;EOS&gt;</code>, where SUBJECT is drawn
+  uniformly from the 3 animals, VERB uniformly from the 3 verbs (independent of the subject), and OBJECT
+  uniformly from all 5 animals+fruits (independent of the verb). This is what makes it a fair test: within
+  each category, the members are 100% interchangeable — cat/dog/cow always play the same role with the same
+  odds, so any two animals induce the exact same next-token statistics, and likewise for fruits and for verbs.
+  The model only ever sees (current token → next token) pairs; it has no notion of "category".
+  </p>
+  <p style="color:var(--muted); font-size:13px; margin-top:6px;">Example generated sentences:</p>
+  <div class="sentences" id="sampleSentences">generating…</div>
+</details>
+
+<div class="card">
+  <h2>Training controls</h2>
+  <div class="controls">
+    <div class="field"><label>Embedding dim</label><input type="number" id="dim" value="6" min="2" max="16"></div>
+    <div class="field"><label>Epochs</label><input type="number" id="epochs" value="120" min="5" max="300"></div>
+    <div class="field"><label>Learning rate</label><input type="number" id="lr" value="0.3" step="0.05" min="0.01" max="2"></div>
+    <div class="field"><label>Sentences</label><input type="number" id="numSent" value="800" min="50" max="5000"></div>
+    <button id="trainBtn">Train model</button>
+    <button id="retrainBtn" class="secondary">Retrain (new random seed)</button>
+  </div>
+  <p class="loading" id="statusLine">Click "Train model" to generate a fresh corpus and train from scratch.</p>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Training loss (cross-entropy)</h2>
+    <canvas id="lossCanvas" width="560" height="220"></canvas>
+  </div>
+  <div class="card">
+    <h2>Learned embeddings, projected to 2D (PCA)</h2>
+    <canvas id="scatterCanvas" width="560" height="420"></canvas>
+    <div class="legend">
+      <span><span class="dot" style="background:var(--animal)"></span>animal</span>
+      <span><span class="dot" style="background:var(--fruit)"></span>fruit</span>
+      <span><span class="dot" style="background:var(--verb)"></span>verb</span>
+      <span><span class="dot" style="background:var(--boundary)"></span>boundary (&lt;EOS&gt;)</span>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Proof, part 1 — the embedding table clusters by category</h2>
+  <p style="color:var(--muted); font-size:13px; margin-top:0;">
+  Nearest neighbors computed by cosine similarity <em>in the full-dimensional embedding space</em>
+  (not the 2D projection). A ✓ means the nearest neighbor is in the same hand-labeled category —
+  a label the training process never saw.
+  </p>
+  <table id="nnTable">
+    <thead><tr><th>Token</th><th>Category</th><th>Nearest neighbor</th><th>2nd nearest</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="stat-row">
+    <div class="stat">Avg. within-category cosine similarity<b id="withinStat">–</b></div>
+    <div class="stat">Avg. across-category cosine similarity<b id="acrossStat">–</b></div>
+  </div>
+  <div class="verdict" id="verdict">Train the model to compute the verdict.</div>
+</div>
+
+<div class="card">
+  <h2>Proof, part 2 — why it happens: same-category tokens predict the same next-token distribution</h2>
+  <p style="color:var(--muted); font-size:13px; margin-top:0;">
+  Each bar is <code>softmax(embedding(token) · W + b)</code> — the model's learned P(next token | token).
+  Segment color = category of the predicted next token, segment width = probability. Compare the three
+  animal rows to each other, the two fruit rows to each other, and the three verb rows to each other.
+  </p>
+  <div id="distBars"></div>
+</div>
+
+<script>
+(function(){
+  const VOCAB = ['cat','dog','cow','apple','mango','eat','chase','see','<EOS>'];
+  const CATS  = ['animal','animal','animal','fruit','fruit','verb','verb','verb','boundary'];
+  const CAT_COLOR = {animal:'#e0574f', fruit:'#2aa198', verb:'#4c8dff', boundary:'#9a9a9a'};
+  const ANIMALS=[0,1,2], FRUITS=[3,4], VERBS=[5,6,7], OBJS=[0,1,2,3,4], EOS=8;
+  const V = VOCAB.length;
+
+  function randChoice(arr){ return arr[Math.floor(Math.random()*arr.length)]; }
+
+  function generateCorpus(numSentences){
+    const stream = [];
+    const sentences = [];
+    for(let i=0;i<numSentences;i++){
+      const s = randChoice(ANIMALS), v = randChoice(VERBS), o = randChoice(OBJS);
+      stream.push(s, v, o, EOS);
+      if(sentences.length < 6) sentences.push([VOCAB[s], VOCAB[v], VOCAB[o]].join(' ') + ' .');
+    }
+    const pairs = [];
+    for(let i=0;i<stream.length-1;i++) pairs.push([stream[i], stream[i+1]]);
+    return { pairs, sentences };
+  }
+
+  function initModel(dim){
+    const E = Array.from({length:V}, () => Array.from({length:dim}, () => (Math.random()-0.5)*0.2));
+    const W = Array.from({length:dim}, () => Array.from({length:V}, () => (Math.random()-0.5)*0.2));
+    const b = new Array(V).fill(0);
+    return { E, W, b, dim };
+  }
+
+  function softmax(logits){
+    const m = Math.max(...logits);
+    const exps = logits.map(x => Math.exp(x-m));
+    const s = exps.reduce((a,c)=>a+c, 0);
+    return exps.map(x => x/s);
+  }
+
+  function forward(model, x){
+    const { E, W, b, dim } = model;
+    const e = E[x];
+    const logits = new Array(V).fill(0);
+    for(let j=0;j<V;j++){
+      let s = b[j];
+      for(let k=0;k<dim;k++) s += e[k]*W[k][j];
+      logits[j] = s;
+    }
+    return { e, logits, probs: softmax(logits) };
+  }
+
+  function trainStep(model, x, y, lr){
+    const { E, W, b, dim } = model;
+    const { e, probs } = forward(model, x);
+    const dLogits = probs.slice();
+    dLogits[y] -= 1;
+
+    // gradient wrt input embedding, using CURRENT (pre-update) W
+    const dE = new Array(dim).fill(0);
+    for(let k=0;k<dim;k++){
+      let s = 0;
+      for(let j=0;j<V;j++) s += W[k][j]*dLogits[j];
+      dE[k] = s;
+    }
+    // update output weights + bias
+    for(let j=0;j<V;j++){
+      b[j] -= lr*dLogits[j];
+      for(let k=0;k<dim;k++) W[k][j] -= lr*e[k]*dLogits[j];
+    }
+    // update the one input embedding row that was looked up
+    for(let k=0;k<dim;k++) E[x][k] -= lr*dE[k];
+
+    return -Math.log(Math.max(probs[y], 1e-9));
+  }
+
+  function trainModel(model, pairs, epochs, lr){
+    const lossHistory = [];
+    const idx = pairs.map((_,i)=>i);
+    for(let ep=0; ep<epochs; ep++){
+      for(let i=idx.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [idx[i], idx[j]] = [idx[j], idx[i]];
+      }
+      let totalLoss = 0;
+      for(const i of idx){
+        const [x,y] = pairs[i];
+        totalLoss += trainStep(model, x, y, lr);
+      }
+      lossHistory.push(totalLoss/pairs.length);
+    }
+    return lossHistory;
+  }
+
+  function dot(a,b){ let s=0; for(let i=0;i<a.length;i++) s+=a[i]*b[i]; return s; }
+  function cosine(a,b){
+    let d=0,na=0,nb=0;
+    for(let i=0;i<a.length;i++){ d+=a[i]*b[i]; na+=a[i]*a[i]; nb+=b[i]*b[i]; }
+    return d/(Math.sqrt(na)*Math.sqrt(nb) + 1e-9);
+  }
+
+  function pca2D(E){
+    const n = E.length, d = E[0].length;
+    const mean = new Array(d).fill(0);
+    E.forEach(v => v.forEach((val,i) => mean[i] += val/n));
+    const C = E.map(v => v.map((val,i) => val-mean[i]));
+    const cov = Array.from({length:d}, () => new Array(d).fill(0));
+    for(let i=0;i<d;i++) for(let j=0;j<d;j++){
+      let s=0; for(let k=0;k<n;k++) s += C[k][i]*C[k][j];
+      cov[i][j] = s/n;
+    }
+    function powerIter(mat){
+      let v = new Array(d).fill(0).map(()=>Math.random()-0.5);
+      for(let iter=0; iter<300; iter++){
+        const nv = new Array(d).fill(0);
+        for(let i=0;i<d;i++) for(let j=0;j<d;j++) nv[i] += mat[i][j]*v[j];
+        const norm = Math.sqrt(nv.reduce((s,x)=>s+x*x,0)) || 1;
+        v = nv.map(x => x/norm);
+      }
+      const Av = new Array(d).fill(0);
+      for(let i=0;i<d;i++) for(let j=0;j<d;j++) Av[i] += mat[i][j]*v[j];
+      const eigVal = v.reduce((s,x,i)=>s+x*Av[i], 0);
+      return { vec:v, val:eigVal };
+    }
+    const { vec:v1, val:l1 } = powerIter(cov);
+    const cov2 = cov.map((row,i) => row.map((val,j) => val - l1*v1[i]*v1[j]));
+    const { vec:v2 } = powerIter(cov2);
+    return C.map(vec => [dot(vec,v1), dot(vec,v2)]);
+  }
+
+  function renderLossChart(canvas, lossHistory){
+    const ctx = canvas.getContext('2d');
+    const W_ = canvas.width, H_ = canvas.height;
+    ctx.clearRect(0,0,W_,H_);
+    const minL = Math.min(...lossHistory), maxL = Math.max(...lossHistory);
+    const pad = 34;
+    ctx.beginPath();
+    lossHistory.forEach((l,i) => {
+      const x = pad + (i/(lossHistory.length-1 || 1))*(W_-2*pad);
+      const y = H_-pad - (l-minL)/(maxL-minL+1e-9)*(H_-2*pad);
+      if(i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    });
+    ctx.strokeStyle = '#4c8dff'; ctx.lineWidth = 2; ctx.stroke();
+    ctx.strokeStyle = '#2a2f3a';
+    ctx.beginPath(); ctx.moveTo(pad,H_-pad); ctx.lineTo(W_-pad,H_-pad); ctx.moveTo(pad,pad); ctx.lineTo(pad,H_-pad); ctx.stroke();
+    ctx.fillStyle = '#9aa2b1'; ctx.font = '11px sans-serif';
+    ctx.fillText('epoch 0', pad, H_-12);
+    ctx.fillText('epoch '+(lossHistory.length-1), W_-pad-55, H_-12);
+    ctx.fillText('loss '+maxL.toFixed(2), pad+4, pad+10);
+    ctx.fillText('loss '+minL.toFixed(2), pad+4, H_-pad-4);
+  }
+
+  function renderScatter(canvas, coords, tokens, cats){
+    const ctx = canvas.getContext('2d');
+    const W_ = canvas.width, H_ = canvas.height;
+    ctx.clearRect(0,0,W_,H_);
+    const xs = coords.map(c=>c[0]), ys = coords.map(c=>c[1]);
+    const minX = Math.min(...xs), maxX = Math.max(...xs);
+    const minY = Math.min(...ys), maxY = Math.max(...ys);
+    const pad = 50;
+    const mapX = x => pad + (x-minX)/(maxX-minX+1e-9)*(W_-2*pad);
+    const mapY = y => H_-pad - (y-minY)/(maxY-minY+1e-9)*(H_-2*pad);
+
+    ctx.strokeStyle = '#2a2f3a';
+    ctx.beginPath();
+    ctx.moveTo(pad, H_/2); ctx.lineTo(W_-pad, H_/2);
+    ctx.moveTo(W_/2, pad); ctx.lineTo(W_/2, H_-pad);
+    ctx.stroke();
+
+    coords.forEach((c,i) => {
+      const px = mapX(c[0]), py = mapY(c[1]);
+      ctx.beginPath();
+      ctx.fillStyle = CAT_COLOR[cats[i]];
+      ctx.arc(px, py, 9, 0, 2*Math.PI);
+      ctx.fill();
+      ctx.strokeStyle = '#0f1115';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.fillStyle = '#e6e8ee';
+      ctx.font = '13px ui-monospace, SFMono-Regular, monospace';
+      ctx.fillText(tokens[i], px+12, py+4);
+    });
+  }
+
+  function buildNNTable(model){
+    let rows = '';
+    const withinSims = [], acrossSims = [];
+    for(let i=0;i<V;i++){
+      for(let j=i+1;j<V;j++){
+        if(CATS[i]==='boundary' || CATS[j]==='boundary') continue;
+        const s = cosine(model.E[i], model.E[j]);
+        if(CATS[i]===CATS[j]) withinSims.push(s); else acrossSims.push(s);
+      }
+    }
+    const avg = arr => arr.length ? arr.reduce((a,c)=>a+c,0)/arr.length : NaN;
+    const withinAvg = avg(withinSims), acrossAvg = avg(acrossSims);
+
+    let allNNCorrect = true, nnConsidered = 0;
+    for(let i=0;i<V;i++){
+      if(CATS[i]==='boundary') continue;
+      const sims = [];
+      for(let j=0;j<V;j++){ if(j!==i) sims.push({ j, s: cosine(model.E[i], model.E[j]) }); }
+      sims.sort((a,b) => b.s - a.s);
+      const top = sims.slice(0,2);
+      nnConsidered++;
+      if(CATS[top[0].j] !== CATS[i]) allNNCorrect = false;
+      rows += `<tr>
+        <td><code>${VOCAB[i]}</code></td>
+        <td><span class="tag" style="background:${CAT_COLOR[CATS[i]]}">${CATS[i]}</span></td>
+        <td>${VOCAB[top[0].j]} (${top[0].s.toFixed(3)}) ${CATS[top[0].j]===CATS[i] ? '✓' : '✗'}</td>
+        <td>${VOCAB[top[1].j]} (${top[1].s.toFixed(3)}) ${CATS[top[1].j]===CATS[i] ? '✓' : '✗'}</td>
+      </tr>`;
+    }
+    return { rows, withinAvg, acrossAvg, allNNCorrect };
+  }
+
+  function buildDistBars(model){
+    let html = '';
+    for(let i=0;i<V;i++){
+      const { probs } = forward(model, i);
+      html += `<div class="dist-row"><div class="dist-label">${VOCAB[i]}</div><div class="dist-bar">`;
+      probs.forEach((p,j) => {
+        html += `<div class="dist-seg" style="width:${(p*100).toFixed(3)}%; background:${CAT_COLOR[CATS[j]]}" title="${VOCAB[i]} → ${VOCAB[j]}: ${(p*100).toFixed(1)}%"></div>`;
+      });
+      html += '</div></div>';
+    }
+    return html;
+  }
+
+  function run(){
+    const dim = parseInt(document.getElementById('dim').value, 10);
+    const epochs = parseInt(document.getElementById('epochs').value, 10);
+    const lr = parseFloat(document.getElementById('lr').value);
+    const numSent = parseInt(document.getElementById('numSent').value, 10);
+    const statusLine = document.getElementById('statusLine');
+
+    statusLine.textContent = 'Generating corpus…';
+    const { pairs, sentences } = generateCorpus(numSent);
+    document.getElementById('sampleSentences').textContent = sentences.join('  ');
+
+    statusLine.textContent = `Training on ${pairs.length} (token → next-token) pairs for ${epochs} epochs…`;
+
+    // Let the DOM update before the (synchronous) training loop blocks the thread.
+    setTimeout(() => {
+      const model = initModel(dim);
+      const t0 = performance.now();
+      const lossHistory = trainModel(model, pairs, epochs, lr);
+      const ms = (performance.now()-t0).toFixed(0);
+
+      renderLossChart(document.getElementById('lossCanvas'), lossHistory);
+
+      const coords = pca2D(model.E);
+      renderScatter(document.getElementById('scatterCanvas'), coords, VOCAB, CATS);
+
+      const { rows, withinAvg, acrossAvg, allNNCorrect } = buildNNTable(model);
+      document.querySelector('#nnTable tbody').innerHTML = rows;
+      document.getElementById('withinStat').textContent = withinAvg.toFixed(3);
+      document.getElementById('acrossStat').textContent = acrossAvg.toFixed(3);
+
+      const verdictEl = document.getElementById('verdict');
+      const gap = withinAvg - acrossAvg;
+      if(allNNCorrect && gap > 0.05){
+        verdictEl.className = 'verdict';
+        verdictEl.textContent = `PROVEN: every same-category token's nearest neighbor is in its own category, and within-category similarity exceeds across-category similarity by ${gap.toFixed(3)} — with no similarity signal ever supplied during training.`;
+      } else if(gap > 0){
+        verdictEl.className = 'verdict';
+        verdictEl.textContent = `Clustering present but weak (gap ${gap.toFixed(3)}). Try more epochs or a slightly higher learning rate.`;
+      } else {
+        verdictEl.className = 'verdict bad';
+        verdictEl.textContent = `No clear clustering yet (gap ${gap.toFixed(3)}). Increase epochs/learning rate and retrain.`;
+      }
+
+      document.getElementById('distBars').innerHTML = buildDistBars(model);
+      statusLine.textContent = `Done. Trained ${pairs.length} pairs × ${epochs} epochs in ${ms} ms.`;
+      window.__lastModel = model;
+    }, 20);
+  }
+
+  document.getElementById('trainBtn').addEventListener('click', run);
+  document.getElementById('retrainBtn').addEventListener('click', run);
+  run();
+})();
+</script>
+
+</body>
+</html>

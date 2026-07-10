@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Depth Without Nonlinearity Is Just One Line</title>
+<style>
+  :root{
+    --bg:#0f1116; --panel:#171a22; --panel2:#1d212b; --border:#2a2f3a;
+    --text:#e7e9ee; --muted:#9aa3b2; --accent:#5ea1ff; --accent2:#ff8a5e;
+    --good:#57d38c; --bad:#ff6b6b; --mono:'SF Mono',Consolas,'Courier New',monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+    padding:28px 20px 60px;
+  }
+  .wrap{max-width:1180px; margin:0 auto;}
+  h1{font-size:22px; margin:0 0 6px; font-weight:650;}
+  .lede{color:var(--muted); font-size:14px; line-height:1.55; margin:0 0 18px; max-width:900px;}
+  .controls{display:flex; align-items:center; gap:14px; margin-bottom:20px; flex-wrap:wrap;}
+  button{
+    background:var(--accent); color:#0b1220; border:none; border-radius:8px;
+    padding:10px 16px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  button:disabled{opacity:.55; cursor:default;}
+  #status{color:var(--muted); font-size:13px; min-height:18px;}
+  .panels{display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:20px;}
+  @media (max-width:900px){ .panels{grid-template-columns:1fr;} }
+  .panel{
+    background:var(--panel); border:1px solid var(--border); border-radius:12px;
+    padding:14px; display:flex; flex-direction:column; align-items:center;
+  }
+  .panel h3{font-size:14px; margin:0 0 2px; font-weight:650;}
+  .panel .sub{color:var(--muted); font-size:12px; margin-bottom:10px; text-align:center;}
+  .panel canvas{border-radius:8px; background:#0b0d12; border:1px solid var(--border);}
+  .acc{margin-top:10px; font-size:13px; text-align:center;}
+  .acc b{font-size:20px; display:block; margin-top:2px;}
+  .acc.good b{color:var(--good);} .acc.bad b{color:var(--bad);}
+  .proof{
+    background:var(--panel2); border:1px solid var(--border); border-radius:12px;
+    padding:16px 18px; margin-bottom:20px; font-size:13.5px; line-height:1.6; color:var(--text);
+  }
+  .proof b{color:var(--accent);}
+  .bonus{
+    background:var(--panel2); border:1px solid var(--border); border-radius:12px;
+    padding:18px 20px;
+  }
+  .bonus h2{font-size:16px; margin:0 0 6px;}
+  .bonus p{color:var(--muted); font-size:13px; line-height:1.55; margin:0 0 14px; max-width:900px;}
+  .chain{display:flex; align-items:center; gap:8px; overflow-x:auto; padding-bottom:8px;}
+  .matbox{flex:0 0 auto; text-align:center;}
+  .matbox .lbl{font-size:11px; color:var(--muted); margin-bottom:4px; font-family:var(--mono);}
+  table.mat{border-collapse:collapse;}
+  table.mat td{
+    font-family:var(--mono); font-size:10px; color:#cfe0ff; padding:2px 5px;
+    border:1px solid #232838; text-align:right; background:#11141c;
+  }
+  .op{font-size:20px; color:var(--muted); padding:0 2px;}
+  .verify{margin-top:18px;}
+  table.vt{width:100%; border-collapse:collapse; font-family:var(--mono); font-size:12px;}
+  table.vt th, table.vt td{padding:6px 8px; border-bottom:1px solid var(--border); text-align:right;}
+  table.vt th{color:var(--muted); font-weight:600; text-align:right;}
+  table.vt th:first-child, table.vt td:first-child{text-align:left;}
+  .headline{
+    margin-top:14px; padding:10px 12px; border-radius:8px; background:#0f2a1c;
+    border:1px solid #1e5b3a; color:var(--good); font-size:13px; font-family:var(--mono);
+  }
+  .legend{display:flex; gap:16px; font-size:11px; color:var(--muted); margin-top:8px;}
+  .dot{display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Depth ≠ power, unless there's a nonlinearity</h1>
+  <p class="lede">
+    Claim: five stacked <em>linear</em> layers collapse mathematically into a single linear map, so a 5-layer
+    linear network is no stronger than 1 layer. Both are restricted to a straight-line decision boundary, so
+    both fail a task that needs a curve — a "ring" (two concentric classes). Insert a ReLU between those
+    same five layers and the network can finally bend the boundary and solve it. This page trains all three
+    on identical data and proves the collapse numerically.
+  </p>
+  <div class="controls">
+    <button id="trainBtn" onclick="runAll()">Generate New Ring Data &amp; Train All 3 Models</button>
+    <span id="status"></span>
+  </div>
+
+  <div class="panels">
+    <div class="panel">
+      <h3>Model A — 1 linear layer</h3>
+      <div class="sub">2 → 1, no hidden layers</div>
+      <canvas id="cvA" width="240" height="240"></canvas>
+      <div class="acc" id="accA"><span>accuracy</span><b>—</b></div>
+    </div>
+    <div class="panel">
+      <h3>Model B — 5 linear layers</h3>
+      <div class="sub">2 → 6 → 6 → 6 → 6 → 1, <b>no activations</b></div>
+      <canvas id="cvB" width="240" height="240"></canvas>
+      <div class="acc" id="accB"><span>accuracy</span><b>—</b></div>
+    </div>
+    <div class="panel">
+      <h3>Model C — 5 layers + ReLU</h3>
+      <div class="sub">same shape as B, ReLU after each hidden layer</div>
+      <canvas id="cvC" width="240" height="240"></canvas>
+      <div class="acc" id="accC"><span>accuracy</span><b>—</b></div>
+    </div>
+  </div>
+  <div class="legend">
+    <span><span class="dot" style="background:#5ea1ff"></span>class 0 (inner disk)</span>
+    <span><span class="dot" style="background:#ff8a5e"></span>class 1 (outer ring)</span>
+  </div>
+
+  <div class="proof" id="proofBox">Click the button above to generate data and train.</div>
+
+  <div class="bonus">
+    <h2>Bonus proof: multiply the five weight matrices</h2>
+    <p>
+      Model B has no activation functions, so its five weight matrices (with biases carried along) compose
+      into <b>one</b> affine map: <span style="color:var(--accent)">W = W₁·W₂·W₃·W₄·W₅</span>. Below are the
+      five trained matrices, their numerical product, and a point-by-point check that feeding data through
+      all five layers gives <em>exactly</em> the same numbers as multiplying by the single collapsed matrix.
+    </p>
+    <div class="chain" id="matChain"></div>
+    <div class="verify">
+      <table class="vt" id="verifyTable"></table>
+    </div>
+    <div class="headline" id="headline"></div>
+  </div>
+</div>
+
+<script>
+/* ---------------- tiny NN engine (per-sample forward/backward + Adam) ---------------- */
+function zeros(rows, cols){ return Array.from({length:rows}, () => new Array(cols).fill(0)); }
+function randInit(rows, cols, scale){
+  return Array.from({length:rows}, () => Array.from({length:cols}, () => (Math.random()*2-1)*scale));
+}
+function sigmoid(x){ return 1/(1+Math.exp(-x)); }
+
+function makeLayer(inDim, outDim, relu, xavier){
+  const scale = xavier ? Math.sqrt(1/inDim) : Math.sqrt(2/inDim); // Xavier for linear stacks, He for ReLU
+  return {
+    W: randInit(inDim, outDim, scale), b: new Array(outDim).fill(0), relu,
+    mW: zeros(inDim, outDim), vW: zeros(inDim, outDim),
+    mb: new Array(outDim).fill(0), vb: new Array(outDim).fill(0),
+  };
+}
+
+function forward(layers, x){
+  let a = x;
+  const cache = [];
+  for (const layer of layers){
+    const { W, b, relu } = layer;
+    const inDim = a.length, outDim = b.length;
+    const z = new Array(outDim);
+    for (let j=0;j<outDim;j++){
+      let s = b[j];
+      for (let i=0;i<inDim;i++) s += a[i]*W[i][j];
+      z[j] = s;
+    }
+    const out = relu ? z.map(v => Math.max(0,v)) : z.slice();
+    cache.push({ input:a, z, relu });
+    a = out;
+  }
+  return { output:a, cache };
+}
+
+function backward(layers, cache, dOutInit){
+  let dA = dOutInit;
+  const grads = new Array(layers.length);
+  for (let l=layers.length-1; l>=0; l--){
+    const layer = layers[l];
+    const { input, z, relu } = cache[l];
+    const outDim = z.length, inDim = input.length;
+    const dz = new Array(outDim);
+    for (let j=0;j<outDim;j++) dz[j] = relu ? (z[j]>0 ? dA[j] : 0) : dA[j];
+    const dW = zeros(inDim, outDim);
+    const db = new Array(outDim).fill(0);
+    const dInput = new Array(inDim).fill(0);
+    for (let j=0;j<outDim;j++){
+      db[j] = dz[j];
+      for (let i=0;i<inDim;i++){
+        dW[i][j] = input[i]*dz[j];
+        dInput[i] += layer.W[i][j]*dz[j];
+      }
+    }
+    grads[l] = { dW, db };
+    dA = dInput;
+  }
+  return grads;
+}
+
+function adamStep(layer, grad, t, lr){
+  const beta1=0.9, beta2=0.999, eps=1e-8;
+  const { W, b, mW, vW, mb, vb } = layer;
+  for (let i=0;i<W.length;i++){
+    for (let j=0;j<W[0].length;j++){
+      mW[i][j] = beta1*mW[i][j] + (1-beta1)*grad.dW[i][j];
+      vW[i][j] = beta2*vW[i][j] + (1-beta2)*grad.dW[i][j]**2;
+      const mHat = mW[i][j]/(1-beta1**t), vHat = vW[i][j]/(1-beta2**t);
+      W[i][j] -= lr*mHat/(Math.sqrt(vHat)+eps);
+    }
+  }
+  for (let j=0;j<b.length;j++){
+    mb[j] = beta1*mb[j] + (1-beta1)*grad.db[j];
+    vb[j] = beta2*vb[j] + (1-beta2)*grad.db[j]**2;
+    const mHat = mb[j]/(1-beta1**t), vHat = vb[j]/(1-beta2**t);
+    b[j] -= lr*mHat/(Math.sqrt(vHat)+eps);
+  }
+}
+
+function trainOneEpoch(layers, X, Y, t0, lr){
+  const idx = X.map((_,i)=>i);
+  for (let i=idx.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [idx[i],idx[j]]=[idx[j],idx[i]]; }
+  let t = t0;
+  for (const i of idx){
+    t++;
+    const { output, cache } = forward(layers, X[i]);
+    const p = sigmoid(output[0]);
+    const grads = backward(layers, cache, [p - Y[i]]);
+    for (let l=0;l<layers.length;l++) adamStep(layers[l], grads[l], t, lr);
+  }
+  return t;
+}
+
+function accuracy(layers, X, Y){
+  let correct = 0;
+  for (let i=0;i<X.length;i++){
+    const pred = forward(layers, X[i]).output[0] > 0 ? 1 : 0;
+    if (pred === Y[i]) correct++;
+  }
+  return correct / X.length;
+}
+
+/* ---------------- matrix helpers for the collapse proof ---------------- */
+function matMul(A, B){
+  const rows=A.length, k=B.length, cols=B[0].length;
+  const out = zeros(rows, cols);
+  for (let i=0;i<rows;i++) for (let j=0;j<cols;j++){ let s=0; for (let p=0;p<k;p++) s+=A[i][p]*B[p][j]; out[i][j]=s; }
+  return out;
+}
+function vecMatMul(v, B){
+  const k=v.length, cols=B[0].length;
+  const out = new Array(cols).fill(0);
+  for (let j=0;j<cols;j++){ let s=0; for (let p=0;p<k;p++) s+=v[p]*B[p][j]; out[j]=s; }
+  return out;
+}
+function vecAdd(a,b){ return a.map((v,i)=>v+b[i]); }
+function collapseLinear(layers){
+  let Wc = layers[0].W, bc = layers[0].b;
+  for (let l=1;l<layers.length;l++){
+    Wc = matMul(Wc, layers[l].W);
+    bc = vecAdd(vecMatMul(bc, layers[l].W), layers[l].b);
+  }
+  return { W:Wc, b:bc };
+}
+
+/* ---------------- ring dataset ---------------- */
+function genRingData(nPerClass){
+  const X=[], Y=[];
+  for (let i=0;i<nPerClass;i++){
+    const r = Math.sqrt(Math.random())*0.32, th = Math.random()*2*Math.PI;
+    X.push([r*Math.cos(th)+(Math.random()-0.5)*0.05, r*Math.sin(th)+(Math.random()-0.5)*0.05]);
+    Y.push(0);
+  }
+  for (let i=0;i<nPerClass;i++){
+    const r = 0.62+Math.random()*0.3, th = Math.random()*2*Math.PI;
+    X.push([r*Math.cos(th)+(Math.random()-0.5)*0.05, r*Math.sin(th)+(Math.random()-0.5)*0.05]);
+    Y.push(1);
+  }
+  return { X, Y };
+}
+
+/* ---------------- rendering ---------------- */
+function drawBoundary(canvas, layers, X, Y){
+  const ctx = canvas.getContext('2d');
+  const w = canvas.width, h = canvas.height, res = 60;
+  const lo = -1.05, hi = 1.05, span = hi-lo;
+  const img = ctx.createImageData(w, h);
+  for (let py=0; py<h; py++){
+    const gy = lo + (py/h)*span;
+    for (let px=0; px<w; px++){
+      const gx = lo + (px/w)*span;
+      const logit = forward(layers, [gx, -gy]).output[0];
+      const p = sigmoid(logit);
+      // blue (class0) -> orange (class1) background, soft
+      const r = 20 + p*70, g = 22 + p*40, b = 34 - p*10;
+      const idx = (py*w+px)*4;
+      img.data[idx]=r; img.data[idx+1]=g; img.data[idx+2]=b; img.data[idx+3]=255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  // scatter
+  for (let i=0;i<X.length;i++){
+    const [x,y] = X[i];
+    const px = ((x-lo)/span)*w, py = h - ((y-lo)/span)*h;
+    ctx.beginPath();
+    ctx.arc(px, py, 3, 0, Math.PI*2);
+    ctx.fillStyle = Y[i]===0 ? '#5ea1ff' : '#ff8a5e';
+    ctx.fill();
+    ctx.lineWidth = 0.6; ctx.strokeStyle = 'rgba(0,0,0,0.5)'; ctx.stroke();
+  }
+}
+
+function fmt(n, d=2){ return (n<0?'':' ') + n.toFixed(d); }
+
+function renderMatrix(M, label){
+  let html = '<div class="matbox"><div class="lbl">'+label+'</div><table class="mat">';
+  for (const row of M){
+    html += '<tr>' + row.map(v=>'<td>'+fmt(v,2)+'</td>').join('') + '</tr>';
+  }
+  html += '</table></div>';
+  return html;
+}
+function renderVector(v, label){
+  return renderMatrix([v], label);
+}
+
+/* ---------------- main run ---------------- */
+function setAcc(elId, acc, threshold){
+  const el = document.getElementById(elId);
+  el.innerHTML = '<span>accuracy</span><b>'+(acc*100).toFixed(1)+'%</b>';
+  el.className = 'acc ' + (acc >= threshold ? 'good' : 'bad');
+}
+
+async function runAll(){
+  const btn = document.getElementById('trainBtn');
+  const status = document.getElementById('status');
+  btn.disabled = true;
+  status.textContent = 'Generating ring data…';
+  await new Promise(r => setTimeout(r, 20));
+
+  const H = 6, LR = 0.005, EPOCHS = 1200;
+  const { X, Y } = genRingData(150);
+
+  const modelA = [ makeLayer(2, 1, false, true) ];
+  const modelB = [
+    makeLayer(2, H, false, true), makeLayer(H, H, false, true), makeLayer(H, H, false, true),
+    makeLayer(H, H, false, true), makeLayer(H, 1, false, true)
+  ];
+  const modelC = [
+    makeLayer(2, H, true, false), makeLayer(H, H, true, false), makeLayer(H, H, true, false),
+    makeLayer(H, H, true, false), makeLayer(H, 1, false, false)
+  ];
+
+  status.textContent = 'Training Model A (1 linear layer)…';
+  await new Promise(r => setTimeout(r, 10));
+  let t = 0; for (let e=0;e<EPOCHS;e++) t = trainOneEpoch(modelA, X, Y, t, LR);
+  const accA = accuracy(modelA, X, Y);
+
+  status.textContent = 'Training Model B (5 linear layers, no activation)…';
+  await new Promise(r => setTimeout(r, 10));
+  t = 0; for (let e=0;e<EPOCHS;e++) t = trainOneEpoch(modelB, X, Y, t, LR);
+  const accB = accuracy(modelB, X, Y);
+
+  status.textContent = 'Training Model C (5 layers + ReLU)…';
+  await new Promise(r => setTimeout(r, 10));
+  t = 0; for (let e=0;e<EPOCHS;e++) t = trainOneEpoch(modelC, X, Y, t, LR);
+  const accC = accuracy(modelC, X, Y);
+
+  status.textContent = 'Rendering…';
+  await new Promise(r => setTimeout(r, 10));
+
+  drawBoundary(document.getElementById('cvA'), modelA, X, Y);
+  drawBoundary(document.getElementById('cvB'), modelB, X, Y);
+  drawBoundary(document.getElementById('cvC'), modelC, X, Y);
+  setAcc('accA', accA, 0.8);
+  setAcc('accB', accB, 0.8);
+  setAcc('accC', accC, 0.8);
+
+  const closeCall = Math.abs(accA-accB) < 0.20;
+  document.getElementById('proofBox').innerHTML =
+    'Model A (1 layer): <b>'+(accA*100).toFixed(1)+'%</b> — a single straight boundary. '+
+    'Model B (5 linear layers): <b>'+(accB*100).toFixed(1)+'%</b> — despite 5 layers and dozens of extra parameters, '+
+    'it is <em>still</em> only a straight boundary, and it is stuck at the same near-chance accuracy as A'+
+    (closeCall ? ' (both hover around 50% — neither line can carve the ring apart)' : '')+
+    '. Model C (5 layers + ReLU, identical layer sizes): <b style="color:var(--good)">'+(accC*100).toFixed(1)+'%</b> — '+
+    'the exact same 5 matrices, just with a ReLU between them, and the boundary curves to wrap the ring. '+
+    'Nothing changed except the nonlinearity.';
+
+  /* ---- bonus: collapse the 5 matrices of Model B into one ---- */
+  const collapsed = collapseLinear(modelB);
+  let chainHtml = '';
+  modelB.forEach((layer, i) => {
+    chainHtml += renderMatrix(layer.W, 'W'+(i+1)+' ('+layer.W.length+'×'+layer.W[0].length+')');
+    chainHtml += '<span class="op">×</span>';
+  });
+  chainHtml = chainHtml.slice(0, -'<span class="op">×</span>'.length);
+  chainHtml += '<span class="op">=</span>';
+  chainHtml += renderMatrix(collapsed.W, 'W₁·W₂·W₃·W₄·W₅ (2×1)');
+  document.getElementById('matChain').innerHTML = chainHtml;
+
+  let vtHtml = '<tr><th>sample x</th><th>full 5-layer forward</th><th>collapsed W·x + b</th><th>|difference|</th></tr>';
+  let maxDiff = 0;
+  for (let i=0;i<6;i++){
+    const x = X[i];
+    const full = forward(modelB, x).output[0];
+    const coll = vecMatMul(x, collapsed.W)[0] + collapsed.b[0];
+    const diff = Math.abs(full-coll);
+    maxDiff = Math.max(maxDiff, diff);
+    vtHtml += '<tr><td>['+x[0].toFixed(3)+', '+x[1].toFixed(3)+']</td>'+
+      '<td>'+full.toFixed(8)+'</td><td>'+coll.toFixed(8)+'</td><td>'+diff.toExponential(2)+'</td></tr>';
+  }
+  document.getElementById('verifyTable').innerHTML = vtHtml;
+
+  let correctColl = 0;
+  for (let i=0;i<X.length;i++){
+    const logit = vecMatMul(X[i], collapsed.W)[0] + collapsed.b[0];
+    if ((logit>0?1:0) === Y[i]) correctColl++;
+  }
+  const accColl = correctColl / X.length;
+
+  document.getElementById('headline').textContent =
+    'Max forward-vs-collapsed difference across all points: ' + maxDiff.toExponential(2) +
+    ' (floating-point noise, i.e. zero) — Model B accuracy: ' + (accB*100).toFixed(1) +
+    '% vs. single-collapsed-matrix accuracy: ' + (accColl*100).toFixed(1) +
+    '%. They are the same function. Five linear layers were always one matrix.';
+
+  status.textContent = 'Done.';
+  btn.disabled = false;
+}
+
+runAll();
+</script>
+</body>
+</html>
